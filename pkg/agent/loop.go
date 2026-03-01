@@ -181,6 +181,12 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				continue
 			}
 
+			// Context-only: add to session but don't process or respond
+			if msg.AddToSessionOnly {
+				al.handleContextOnlyMessage(ctx, msg)
+				continue
+			}
+
 			// Process message
 			func() {
 				// TODO: Re-enable media cleanup after inbound media is properly consumed by the agent.
@@ -370,6 +376,62 @@ func (al *AgentLoop) ProcessHeartbeat(ctx context.Context, content, channel, cha
 		SendResponse:    false,
 		NoHistory:       true, // Don't load session history for heartbeat
 	})
+}
+
+// handleContextOnlyMessage adds a message to the session without processing or responding.
+// Used for group messages that don't trigger a reply so the bot has context for future @mentions.
+func (al *AgentLoop) handleContextOnlyMessage(ctx context.Context, msg bus.InboundMessage) {
+	route := al.registry.ResolveRoute(routing.RouteInput{
+		Channel:    msg.Channel,
+		AccountID:  msg.Metadata["account_id"],
+		Peer:       extractPeer(msg),
+		ParentPeer: extractParentPeer(msg),
+		GuildID:    msg.Metadata["guild_id"],
+		TeamID:     msg.Metadata["team_id"],
+	})
+
+	agent, ok := al.registry.GetAgent(route.AgentID)
+	if !ok {
+		agent = al.registry.GetDefaultAgent()
+	}
+	if agent == nil {
+		return
+	}
+
+	sessionKey := route.SessionKey
+	if msg.SessionKey != "" && strings.HasPrefix(msg.SessionKey, "agent:") {
+		sessionKey = msg.SessionKey
+	}
+	if sessionKey == "" {
+		return
+	}
+
+	// Include sender for group context: "Adam: test" so the LLM can identify who said what
+	content := msg.Content
+	if msg.Peer.Kind == "group" || msg.Peer.Kind == "channel" {
+		senderName := msg.Metadata["first_name"]
+		if senderName == "" {
+			senderName = msg.Sender.DisplayName
+		}
+		if senderName == "" {
+			senderName = msg.Sender.Username
+		}
+		if senderName == "" {
+			senderName = msg.SenderID
+		}
+		if senderName != "" {
+			content = senderName + ": " + content
+		}
+	}
+
+	agent.Sessions.AddMessage(sessionKey, "user", content)
+	agent.Sessions.Save(sessionKey)
+
+	logger.DebugCF("agent", "Added context-only message to session",
+		map[string]any{
+			"session_key": sessionKey,
+			"content_len": len(content),
+		})
 }
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {

@@ -301,6 +301,62 @@ func (c *BaseChannel) HandleMessage(
 	}
 }
 
+// HandleContextOnlyMessage adds a message to the session history without processing or responding.
+// Used for group messages that don't trigger a reply (e.g. plain messages when mention_only)
+// so the bot has context when the user later @mentions.
+// Skips typing indicator, reaction, and placeholder.
+func (c *BaseChannel) HandleContextOnlyMessage(
+	ctx context.Context,
+	peer bus.Peer,
+	messageID, senderID, chatID, content string,
+	media []string,
+	metadata map[string]string,
+	senderOpts ...bus.SenderInfo,
+) {
+	var sender bus.SenderInfo
+	if len(senderOpts) > 0 {
+		sender = senderOpts[0]
+	}
+	if sender.CanonicalID != "" || sender.PlatformID != "" {
+		if !c.IsAllowedSender(sender) {
+			return
+		}
+	} else {
+		if !c.IsAllowed(senderID) {
+			return
+		}
+	}
+
+	resolvedSenderID := senderID
+	if sender.CanonicalID != "" {
+		resolvedSenderID = sender.CanonicalID
+	}
+
+	scope := BuildMediaScope(c.name, chatID, messageID)
+
+	msg := bus.InboundMessage{
+		Channel:         c.name,
+		SenderID:        resolvedSenderID,
+		Sender:          sender,
+		ChatID:          chatID,
+		Content:         content,
+		Media:           media,
+		Peer:            peer,
+		MessageID:       messageID,
+		MediaScope:      scope,
+		Metadata:        metadata,
+		AddToSessionOnly: true,
+	}
+
+	if err := c.bus.PublishInbound(ctx, msg); err != nil {
+		logger.ErrorCF("channels", "Failed to publish context message", map[string]any{
+			"channel": c.name,
+			"chat_id": chatID,
+			"error":   err.Error(),
+		})
+	}
+}
+
 func (c *BaseChannel) SetRunning(running bool) {
 	c.running.Store(running)
 }

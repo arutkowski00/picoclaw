@@ -27,6 +27,11 @@ type InboundMessage struct {
 	MediaScope string            `json:"media_scope,omitempty"` // media lifecycle scope
 	SessionKey string            `json:"session_key"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
+
+	// AddToSessionOnly: when true, add message to session history but do not process or respond.
+	// Used for group messages that don't trigger a reply (e.g. non-mentions with mention_only)
+	// so the bot has context when the user later @mentions.
+	AddToSessionOnly bool `json:"add_to_session_only,omitempty"`
 }
 
 type OutboundMessage struct {

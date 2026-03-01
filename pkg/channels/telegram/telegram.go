@@ -466,6 +466,22 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		}
 		respond, cleaned := c.ShouldRespondInGroup(isMentioned, content)
 		if !respond {
+			// Add to session as context so the bot can recall it when user later @mentions
+			c.HandleContextOnlyMessage(c.ctx,
+				bus.Peer{Kind: "group", ID: fmt.Sprintf("%d", chatID)},
+				fmt.Sprintf("%d", message.MessageID),
+				platformID,
+				fmt.Sprintf("%d", chatID),
+				content,
+				mediaPaths,
+				map[string]string{
+					"user_id":    fmt.Sprintf("%d", user.ID),
+					"username":   user.Username,
+					"first_name": user.FirstName,
+					"is_group":   "true",
+				},
+				sender,
+			)
 			return nil
 		}
 		content = cleaned
