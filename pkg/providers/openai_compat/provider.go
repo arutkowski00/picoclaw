@@ -9,11 +9,14 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/providers/protocoltypes"
 )
+
+var thinkTagRe = regexp.MustCompile(`(?s)<think>.*?</think>`)
 
 type (
 	ToolCall               = protocoltypes.ToolCall
@@ -274,10 +277,37 @@ func parseResponse(body []byte) (*LLMResponse, error) {
 		toolCalls = append(toolCalls, toolCall)
 	}
 
+	content := choice.Message.Content
+	reasoning := choice.Message.Reasoning
+	reasoningContent := choice.Message.ReasoningContent
+
+	// Some models (e.g. MiniMax) embed chain-of-thought inside <think> tags
+	// in the content field instead of using the dedicated reasoning fields.
+	// Extract and relocate so downstream code never sees raw tags.
+	if strings.Contains(content, "<think>") {
+		extracted := thinkTagRe.ReplaceAllStringFunc(content, func(m string) string { return "" })
+		thinking := thinkTagRe.FindAllString(content, -1)
+		var buf strings.Builder
+		for _, t := range thinking {
+			t = strings.TrimPrefix(t, "<think>")
+			t = strings.TrimSuffix(t, "</think>")
+			buf.WriteString(strings.TrimSpace(t))
+		}
+		content = strings.TrimSpace(extracted)
+		if buf.Len() > 0 {
+			if reasoning == "" {
+				reasoning = buf.String()
+			}
+			if reasoningContent == "" {
+				reasoningContent = buf.String()
+			}
+		}
+	}
+
 	return &LLMResponse{
-		Content:          choice.Message.Content,
-		ReasoningContent: choice.Message.ReasoningContent,
-		Reasoning:        choice.Message.Reasoning,
+		Content:          content,
+		ReasoningContent: reasoningContent,
+		Reasoning:        reasoning,
 		ReasoningDetails: choice.Message.ReasoningDetails,
 		ToolCalls:        toolCalls,
 		FinishReason:     choice.FinishReason,
