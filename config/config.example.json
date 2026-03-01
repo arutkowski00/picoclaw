@@ -253,7 +253,8 @@
     "enabled": true,
     "interval": 30,
     "target_channel": "",
-    "persist_to_session": false
+    "persist_to_session": false,
+    "catchup_enabled": false
   },
   "devices": {
     "enabled": false,

@@ -41,7 +41,13 @@ type Options struct {
 	TargetChannel string
 	// PersistToSession: when true, heartbeat responses are added to target's session.
 	PersistToSession bool
+	// CatchupEnabled: when true and TargetChannel set, check for unaddressed messages.
+	CatchupEnabled bool
 }
+
+// CatchupChecker returns (hasUnaddressed, sessionKey) for a channel:chatID.
+// Used when catchup_enabled to detect user messages after last assistant.
+type CatchupChecker func(channel, chatID string) (hasUnaddressed bool, sessionKey string)
 
 // HeartbeatService manages periodic heartbeat checks
 type HeartbeatService struct {
@@ -53,6 +59,7 @@ type HeartbeatService struct {
 	enabled         bool
 	opts            Options
 	persistCallback func(sessionKey, content string)
+	catchupChecker  CatchupChecker
 	mu              sync.RWMutex
 	stopChan        chan struct{}
 }
@@ -103,6 +110,14 @@ func (hs *HeartbeatService) SetHandler(handler HeartbeatHandler) {
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 	hs.handler = handler
+}
+
+// SetCatchupChecker sets the function to check for unaddressed messages.
+// Used when catchup_enabled and target_channel are both set.
+func (hs *HeartbeatService) SetCatchupChecker(fn CatchupChecker) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.catchupChecker = fn
 }
 
 // Start begins the heartbeat service
@@ -178,6 +193,7 @@ func (hs *HeartbeatService) executeHeartbeat() {
 	handler := hs.handler
 	opts := hs.opts
 	persistCallback := hs.persistCallback
+	catchupChecker := hs.catchupChecker
 	if !hs.enabled || hs.stopChan == nil {
 		hs.mu.RUnlock()
 		return
@@ -186,6 +202,45 @@ func (hs *HeartbeatService) executeHeartbeat() {
 
 	if !enabled {
 		return
+	}
+
+	// Catch-up: check for unaddressed messages when catchup_enabled and target_channel are set
+	if opts.CatchupEnabled && opts.TargetChannel != "" && catchupChecker != nil {
+		hs.mu.RLock()
+		msgBus := hs.bus
+		hs.mu.RUnlock()
+		if msgBus != nil {
+			channel, chatID := hs.parseLastChannel(opts.TargetChannel)
+			if channel != "" && chatID != "" && !constants.IsInternalChannel(channel) {
+				hasUnaddressed, _ := catchupChecker(channel, chatID)
+				if hasUnaddressed {
+					peerKind := "direct"
+					if channel == "telegram" && len(chatID) > 0 && chatID[0] == '-' {
+						peerKind = "group"
+					} else if channel == "discord" {
+						peerKind = "channel"
+					}
+					catchupMsg := bus.InboundMessage{
+						Channel:  channel,
+						ChatID:   chatID,
+						Peer:     bus.Peer{Kind: peerKind, ID: chatID},
+						SenderID: "heartbeat",
+						Content:  "[Catch-up: Please review the recent messages in this conversation and respond to anything that needs a response.]",
+					}
+					pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer pubCancel()
+					if err := msgBus.PublishInbound(pubCtx, catchupMsg); err != nil {
+						hs.logErrorf("Catch-up publish failed: %v", err)
+					} else {
+						hs.logInfof("Catch-up triggered for %s:%s", channel, chatID)
+						logger.InfoCF("heartbeat", "Catch-up triggered", map[string]any{
+							"channel": channel,
+							"chat_id": chatID,
+						})
+					}
+				}
+			}
+		}
 	}
 
 	logger.DebugC("heartbeat", "Executing heartbeat")

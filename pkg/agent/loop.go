@@ -334,6 +334,47 @@ func (al *AgentLoop) PersistHeartbeatToSession(sessionKey, content string) {
 	agent.Sessions.Save(sessionKey)
 }
 
+// HasUnaddressedMessages checks if there are user messages after the last assistant message.
+// Used by heartbeat catch-up to proactively respond when the bot wasn't @mentioned.
+// Ignores "tool" role messages (they belong to the assistant's turn).
+func (al *AgentLoop) HasUnaddressedMessages(channel, chatID string) (bool, string) {
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		return false, ""
+	}
+	sessionKey := routing.BuildDefaultSessionKeyForTargetChannel(channel, chatID)
+	if sessionKey == "" {
+		return false, ""
+	}
+	history := agent.Sessions.GetHistory(sessionKey)
+	if len(history) == 0 {
+		return false, sessionKey
+	}
+	// Find last assistant message index (ignore "tool" role)
+	lastAssistantIdx := -1
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == "assistant" {
+			lastAssistantIdx = i
+			break
+		}
+	}
+	// Check if any user message exists after last assistant
+	for i := lastAssistantIdx + 1; i < len(history); i++ {
+		if history[i].Role == "user" {
+			return true, sessionKey
+		}
+	}
+	// No assistant yet; if we have user messages, they're unaddressed
+	if lastAssistantIdx < 0 {
+		for i := len(history) - 1; i >= 0; i-- {
+			if history[i].Role == "user" {
+				return true, sessionKey
+			}
+		}
+	}
+	return false, sessionKey
+}
+
 // RecordLastChatID records the last active chat ID for this workspace.
 // This uses the atomic state save mechanism to prevent data loss on crash.
 func (al *AgentLoop) RecordLastChatID(chatID string) error {
@@ -1242,7 +1283,7 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string) {
 		s2, _ := al.summarizeBatch(ctx, agent, part2, "")
 
 		mergePrompt := fmt.Sprintf(
-			"Merge these two conversation summaries into one cohesive summary:\n\n1: %s\n\n2: %s",
+			"Merge these two conversation summaries into one cohesive summary.\nCRITICAL: Preserve any important concrete data (booking refs, IDs, flight details, names, numbers, URLs, decisions). Do not omit these.\n\n1: %s\n\n2: %s",
 			s1,
 			s2,
 		)
@@ -1286,6 +1327,7 @@ func (al *AgentLoop) summarizeBatch(
 ) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("Provide a concise summary of this conversation segment, preserving core context and key points.\n")
+	sb.WriteString("CRITICAL: Preserve any important concrete data — booking references, IDs, flight details, names, numbers, URLs, decisions made. Do not omit these even when condensing.\n")
 	if existingSummary != "" {
 		sb.WriteString("Existing context: ")
 		sb.WriteString(existingSummary)

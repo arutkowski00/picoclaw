@@ -386,6 +386,10 @@ type HeartbeatConfig struct {
 	// so the bot can recall them when the user refers to "what you said earlier".
 	// Uses LastSessionKey when sending to last channel, or derives from TargetChannel when set.
 	PersistToSession bool `json:"persist_to_session,omitempty" env:"PICOCLAW_HEARTBEAT_PERSIST_TO_SESSION"`
+
+	// CatchupEnabled: when true and target_channel is set, heartbeat checks for unaddressed messages
+	// (user messages after last assistant) and proactively triggers a response.
+	CatchupEnabled bool `json:"catchup_enabled,omitempty" env:"PICOCLAW_HEARTBEAT_CATCHUP_ENABLED"`
 }
 
 type DevicesConfig struct {

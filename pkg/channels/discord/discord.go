@@ -321,9 +321,22 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		content = c.stripBotMention(content)
 		respond, cleaned := c.ShouldRespondInGroup(isMentioned, content)
 		if !respond {
-			logger.DebugCF("discord", "Group message ignored by group trigger", map[string]any{
-				"user_id": m.Author.ID,
-			})
+			// Add to session as context (like Telegram) so the bot can recall it when user later @mentions
+			c.HandleContextOnlyMessage(c.ctx,
+				bus.Peer{Kind: "channel", ID: m.ChannelID},
+				m.ID,
+				m.Author.ID,
+				m.ChannelID,
+				content,
+				nil,
+				map[string]string{
+					"user_id":     m.Author.ID,
+					"username":    m.Author.Username,
+					"discord_id":  m.Author.ID,
+					"is_guild":    "true",
+				},
+				sender,
+			)
 			return
 		}
 		content = cleaned

@@ -99,7 +99,9 @@ func gatewayCmd(debug bool) error {
 	heartbeatService.SetOptions(heartbeat.Options{
 		TargetChannel:    cfg.Heartbeat.TargetChannel,
 		PersistToSession: cfg.Heartbeat.PersistToSession,
+		CatchupEnabled:    cfg.Heartbeat.CatchupEnabled,
 	})
+	heartbeatService.SetCatchupChecker(agentLoop.HasUnaddressedMessages)
 	heartbeatService.SetPersistCallback(agentLoop.PersistHeartbeatToSession)
 	heartbeatService.SetBus(msgBus)
 	heartbeatService.SetHandler(func(prompt, channel, chatID string) *tools.ToolResult {
