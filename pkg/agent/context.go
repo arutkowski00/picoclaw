@@ -115,6 +115,12 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 	return strings.Join(parts, "\n\n---\n\n")
 }
 
+// BuildSkillsSummary returns the skills summary section (same format as in BuildSystemPrompt).
+// Used by subagents to get skill context without full system prompt.
+func (cb *ContextBuilder) BuildSkillsSummary() string {
+	return cb.skillsLoader.BuildSkillsSummary()
+}
+
 // BuildSystemPromptWithCache returns the cached system prompt if available
 // and source files haven't changed, otherwise builds and caches it.
 // Source file changes are detected via mtime checks (cheap stat calls).

@@ -22,20 +22,25 @@ type SubagentTask struct {
 	Created       int64
 }
 
+// SubagentToolsExclude lists tools that subagents must not have access to
+// (e.g. to prevent spawn recursion).
+var SubagentToolsExclude = []string{"spawn", "subagent"}
+
 type SubagentManager struct {
-	tasks          map[string]*SubagentTask
-	mu             sync.RWMutex
-	provider       providers.LLMProvider
-	defaultModel   string
-	bus            *bus.MessageBus
-	workspace      string
-	tools          *ToolRegistry
-	maxIterations  int
-	maxTokens      int
-	temperature    float64
-	hasMaxTokens   bool
-	hasTemperature bool
-	nextID         int
+	tasks                 map[string]*SubagentTask
+	mu                    sync.RWMutex
+	provider              providers.LLMProvider
+	defaultModel          string
+	bus                   *bus.MessageBus
+	workspace             string
+	tools                 *ToolRegistry
+	skillsSummaryProvider func() string // optional: enriches subagent system prompt
+	maxIterations         int
+	maxTokens             int
+	temperature           float64
+	hasMaxTokens          bool
+	hasTemperature        bool
+	nextID                int
 }
 
 func NewSubagentManager(
@@ -80,6 +85,15 @@ func (sm *SubagentManager) RegisterTool(tool Tool) {
 	sm.tools.Register(tool)
 }
 
+// SetSkillsSummaryProvider sets a function that returns the skills summary for subagent context.
+// When set, the subagent system prompt includes skills so it can use read_file to follow
+// skill instructions (weather, calendar, qbittorrent, etc.). If not set, subagent gets minimal context.
+func (sm *SubagentManager) SetSkillsSummaryProvider(provider func() string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.skillsSummaryProvider = provider
+}
+
 func (sm *SubagentManager) Spawn(
 	ctx context.Context,
 	task, label, agentID, originChannel, originChatID string,
@@ -119,7 +133,18 @@ func (sm *SubagentManager) runTask(ctx context.Context, task *SubagentTask, call
 	// Build system prompt for subagent
 	systemPrompt := `You are a subagent. Complete the given task independently and report the result.
 You have access to tools - use them as needed to complete your task.
-After completing the task, provide a clear summary of what was done.`
+After completing the task, provide a clear summary of what was done.
+If the task requires skills (weather, calendar, qbittorrent, etc.), read the relevant SKILL.md file first using read_file.`
+
+	sm.mu.RLock()
+	skillsProvider := sm.skillsSummaryProvider
+	sm.mu.RUnlock()
+
+	if skillsProvider != nil {
+		if summary := skillsProvider(); summary != "" {
+			systemPrompt += "\n\n# Skills\n\nThe following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.\n\n" + summary
+		}
+	}
 
 	messages := []providers.Message{
 		{
@@ -143,9 +168,9 @@ After completing the task, provide a clear summary of what was done.`
 	default:
 	}
 
-	// Run tool loop with access to tools
+	// Run tool loop with filtered tools (exclude spawn/subagent to prevent recursion)
 	sm.mu.RLock()
-	tools := sm.tools
+	subagentTools := sm.tools.CloneExcluding(SubagentToolsExclude...)
 	maxIter := sm.maxIterations
 	maxTokens := sm.maxTokens
 	temperature := sm.temperature
@@ -167,7 +192,7 @@ After completing the task, provide a clear summary of what was done.`
 	loopResult, err := RunToolLoop(ctx, ToolLoopConfig{
 		Provider:      sm.provider,
 		Model:         sm.defaultModel,
-		Tools:         tools,
+		Tools:         subagentTools,
 		MaxIterations: maxIter,
 		LLMOptions:    llmOptions,
 	}, messages, task.OriginChannel, task.OriginChatID)
@@ -319,10 +344,10 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		},
 	}
 
-	// Use RunToolLoop to execute with tools (same as async SpawnTool)
+	// Use RunToolLoop to execute with filtered tools (same as async SpawnTool)
 	sm := t.manager
 	sm.mu.RLock()
-	tools := sm.tools
+	subagentTools := sm.tools.CloneExcluding(SubagentToolsExclude...)
 	maxIter := sm.maxIterations
 	maxTokens := sm.maxTokens
 	temperature := sm.temperature
@@ -344,7 +369,7 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	loopResult, err := RunToolLoop(ctx, ToolLoopConfig{
 		Provider:      sm.provider,
 		Model:         sm.defaultModel,
-		Tools:         tools,
+		Tools:         subagentTools,
 		MaxIterations: maxIter,
 		LLMOptions:    llmOptions,
 	}, messages, t.originChannel, t.originChatID)

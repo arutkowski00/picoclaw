@@ -122,6 +122,34 @@ func TestToolRegistry_Execute_Success(t *testing.T) {
 	}
 }
 
+func TestToolRegistry_CloneExcluding(t *testing.T) {
+	r := NewToolRegistry()
+	r.Register(newMockTool("exec", "run commands"))
+	r.Register(newMockTool("spawn", "spawn subagent"))
+	r.Register(newMockTool("message", "send message"))
+
+	filtered := r.CloneExcluding("spawn", "subagent")
+	if filtered.Count() != 2 {
+		t.Errorf("expected 2 tools after excluding spawn and subagent, got %d", filtered.Count())
+	}
+	if _, ok := filtered.Get("spawn"); ok {
+		t.Error("spawn should be excluded")
+	}
+	if _, ok := filtered.Get("subagent"); ok {
+		t.Error("subagent should be excluded")
+	}
+	if _, ok := filtered.Get("exec"); !ok {
+		t.Error("exec should be present")
+	}
+	if _, ok := filtered.Get("message"); !ok {
+		t.Error("message should be present")
+	}
+	// Original registry unchanged
+	if r.Count() != 3 {
+		t.Errorf("original registry should still have 3 tools, got %d", r.Count())
+	}
+}
+
 func TestToolRegistry_Execute_NotFound(t *testing.T) {
 	r := NewToolRegistry()
 	result := r.Execute(context.Background(), "missing", nil)

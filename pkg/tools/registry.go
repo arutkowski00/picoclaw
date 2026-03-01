@@ -167,6 +167,25 @@ func (r *ToolRegistry) ToProviderDefs() []providers.ToolDefinition {
 	return definitions
 }
 
+// CloneExcluding returns a new registry containing all tools except the named ones.
+// Tool instances are shared (not copied). Used to restrict subagent tool access
+// (e.g. exclude spawn/subagent to prevent recursion).
+func (r *ToolRegistry) CloneExcluding(names ...string) *ToolRegistry {
+	exclude := make(map[string]struct{})
+	for _, n := range names {
+		exclude[n] = struct{}{}
+	}
+	out := NewToolRegistry()
+	r.mu.RLock()
+	for name, tool := range r.tools {
+		if _, skip := exclude[name]; !skip {
+			out.tools[name] = tool
+		}
+	}
+	r.mu.RUnlock()
+	return out
+}
+
 // List returns a list of all registered tool names.
 func (r *ToolRegistry) List() []string {
 	r.mu.RLock()

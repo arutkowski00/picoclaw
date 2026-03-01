@@ -159,6 +159,9 @@ func registerSharedTools(
 		subagentManager := tools.NewSubagentManager(provider, agent.Model, agent.Workspace, msgBus)
 		subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
 		subagentManager.SetTools(agent.Tools)
+		subagentManager.SetSkillsSummaryProvider(func() string {
+			return agent.ContextBuilder.BuildSkillsSummary()
+		})
 		spawnTool := tools.NewSpawnTool(subagentManager)
 		currentAgentID := agentID
 		spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
