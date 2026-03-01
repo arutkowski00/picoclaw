@@ -77,7 +77,7 @@ Your workspace is at: %s
 
 2. **Be helpful and accurate** - When using tools, briefly explain what you're doing.
 
-3. **Memory** - When interacting with me if something seems memorable, update %s/memory/MEMORY.md
+3. **Memory** - Proactively store information that may be useful later. When you learn preferences, important facts, decisions, booking references, or anything the user might need you to recall, you MUST use the store_memory tool to save it. Do NOT use edit_file for memory/MEMORY.md — always use store_memory. Do this without being asked; do not wait for the user to say "remember this."
 
 4. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.`,
 		workspacePath, workspacePath, workspacePath, workspacePath, workspacePath)
@@ -182,13 +182,24 @@ func (cb *ContextBuilder) InvalidateCache() {
 // separately in sourceFilesChangedLocked because it requires both directory-
 // level and recursive file-level mtime checks.
 func (cb *ContextBuilder) sourcePaths() []string {
-	return []string{
+	paths := []string{
 		filepath.Join(cb.workspace, "AGENTS.md"),
 		filepath.Join(cb.workspace, "SOUL.md"),
 		filepath.Join(cb.workspace, "USER.md"),
 		filepath.Join(cb.workspace, "IDENTITY.md"),
 		filepath.Join(cb.workspace, "memory", "MEMORY.md"),
 	}
+	// Include recent daily note paths (same 3-day window as GetMemoryContext/GetRecentDailyNotes).
+	// These paths change every day, so we compute them at call time rather than
+	// keeping a static list. buildCacheBaseline handles non-existent paths gracefully.
+	memoryDir := filepath.Join(cb.workspace, "memory")
+	for i := range 3 {
+		date := time.Now().AddDate(0, 0, -i)
+		dateStr := date.Format("20060102")
+		monthDir := dateStr[:6]
+		paths = append(paths, filepath.Join(memoryDir, monthDir, dateStr+".md"))
+	}
+	return paths
 }
 
 // cacheBaseline holds the file existence snapshot and the latest observed
