@@ -43,6 +43,12 @@ type Options struct {
 	PersistToSession bool
 	// CatchupEnabled: when true and TargetChannel set, check for unaddressed messages.
 	CatchupEnabled bool
+	// ConsolidationEnabled: when true, every ConsolidationInterval cycles the
+	// heartbeat fires a memory consolidation pass via promote_to_memory.
+	ConsolidationEnabled bool
+	// ConsolidationInterval: how many heartbeat cycles between consolidation runs.
+	// Default 4 (~2h at 30-min interval). 0 disables consolidation.
+	ConsolidationInterval int
 }
 
 // CatchupChecker returns (hasUnaddressed, sessionKey) for a channel:chatID.
@@ -61,6 +67,7 @@ type HeartbeatService struct {
 	persistCallback func(sessionKey, content string)
 	catchupChecker  CatchupChecker
 	mu              sync.RWMutex
+	heartbeatCount  int
 	stopChan        chan struct{}
 }
 
@@ -241,6 +248,16 @@ func (hs *HeartbeatService) executeHeartbeat() {
 				}
 			}
 		}
+	}
+
+	// Increment heartbeat cycle counter and optionally fire consolidation.
+	hs.mu.Lock()
+	hs.heartbeatCount++
+	count := hs.heartbeatCount
+	hs.mu.Unlock()
+	if opts.ConsolidationEnabled && opts.ConsolidationInterval > 0 &&
+		count%opts.ConsolidationInterval == 0 {
+		hs.fireConsolidation(handler)
 	}
 
 	logger.DebugC("heartbeat", "Executing heartbeat")

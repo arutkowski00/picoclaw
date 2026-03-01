@@ -390,6 +390,14 @@ type HeartbeatConfig struct {
 	// CatchupEnabled: when true and target_channel is set, heartbeat checks for unaddressed messages
 	// (user messages after last assistant) and proactively triggers a response.
 	CatchupEnabled bool `json:"catchup_enabled,omitempty" env:"PICOCLAW_HEARTBEAT_CATCHUP_ENABLED"`
+
+	// ConsolidationEnabled: when true, the heartbeat periodically runs a
+	// memory consolidation pass to promote daily notes to MEMORY.md.
+	ConsolidationEnabled bool `json:"consolidation_enabled,omitempty" env:"PICOCLAW_HEARTBEAT_CONSOLIDATION_ENABLED"`
+
+	// ConsolidationInterval: how many heartbeat cycles between consolidation
+	// runs. Default 4 (e.g. every 2h if interval=30min). 0 disables.
+	ConsolidationInterval int  `json:"consolidation_interval,omitempty" env:"PICOCLAW_HEARTBEAT_CONSOLIDATION_INTERVAL"`
 }
 
 type DevicesConfig struct {

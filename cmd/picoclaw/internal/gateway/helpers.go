@@ -97,9 +97,11 @@ func gatewayCmd(debug bool) error {
 		cfg.Heartbeat.Enabled,
 	)
 	heartbeatService.SetOptions(heartbeat.Options{
-		TargetChannel:    cfg.Heartbeat.TargetChannel,
-		PersistToSession: cfg.Heartbeat.PersistToSession,
-		CatchupEnabled:    cfg.Heartbeat.CatchupEnabled,
+		TargetChannel:         cfg.Heartbeat.TargetChannel,
+		PersistToSession:      cfg.Heartbeat.PersistToSession,
+		CatchupEnabled:        cfg.Heartbeat.CatchupEnabled,
+		ConsolidationEnabled:  cfg.Heartbeat.ConsolidationEnabled,
+		ConsolidationInterval: consolidationInterval(cfg.Heartbeat.ConsolidationInterval),
 	})
 	heartbeatService.SetCatchupChecker(agentLoop.HasUnaddressedMessages)
 	heartbeatService.SetPersistCallback(agentLoop.PersistHeartbeatToSession)
@@ -245,4 +247,13 @@ func setupCronTool(
 	})
 
 	return cronService
+}
+
+// consolidationInterval returns the effective consolidation interval,
+// defaulting to 4 cycles if the configured value is 0.
+func consolidationInterval(configured int) int {
+	if configured <= 0 {
+		return 4
+	}
+	return configured
 }
