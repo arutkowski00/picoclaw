@@ -61,6 +61,7 @@ func NewAgentInstance(
 	toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict))
 	toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict))
 	toolsRegistry.Register(tools.NewStoreMemoryTool(workspace))
+	toolsRegistry.Register(tools.NewPromoteToMemoryTool(workspace))
 
 	sessionsDir := filepath.Join(workspace, "sessions")
 	sessionsManager := session.NewSessionManager(sessionsDir)
