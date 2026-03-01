@@ -27,7 +27,7 @@ import (
 
 var (
 	reHeading    = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
-	reBlockquote = regexp.MustCompile(`^>\s*(.*)$`)
+	reBlockquote = regexp.MustCompile(`(?m)^>\s*(.*)$`)
 	reLink       = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 	reBoldStar   = regexp.MustCompile(`\*\*(.+?)\*\*`)
 	reBoldUnder  = regexp.MustCompile(`__(.+?)__`)
