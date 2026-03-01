@@ -302,6 +302,29 @@ func (al *AgentLoop) RecordLastChannel(channel string) error {
 	return al.state.SetLastChannel(channel)
 }
 
+// RecordLastSessionKey records the session key used for the last message.
+// Used by heartbeat with persist_to_session to add responses to the correct session.
+func (al *AgentLoop) RecordLastSessionKey(sessionKey string) error {
+	if al.state == nil || sessionKey == "" {
+		return nil
+	}
+	return al.state.SetLastSessionKey(sessionKey)
+}
+
+// PersistHeartbeatToSession adds an assistant message to the given session.
+// Used by heartbeat when persist_to_session is enabled so the bot can recall its own output.
+func (al *AgentLoop) PersistHeartbeatToSession(sessionKey, content string) {
+	if sessionKey == "" || content == "" {
+		return
+	}
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		return
+	}
+	agent.Sessions.AddMessage(sessionKey, "assistant", content)
+	agent.Sessions.Save(sessionKey)
+}
+
 // RecordLastChatID records the last active chat ID for this workspace.
 // This uses the atomic state save mechanism to prevent data loss on crash.
 func (al *AgentLoop) RecordLastChatID(chatID string) error {
@@ -485,13 +508,15 @@ func (al *AgentLoop) processSystemMessage(ctx context.Context, msg bus.InboundMe
 
 // runAgentLoop is the core message processing logic.
 func (al *AgentLoop) runAgentLoop(ctx context.Context, agent *AgentInstance, opts processOptions) (string, error) {
-	// 0. Record last channel for heartbeat notifications (skip internal channels)
-	if opts.Channel != "" && opts.ChatID != "" {
-		// Don't record internal channels (cli, system, subagent)
-		if !constants.IsInternalChannel(opts.Channel) {
-			channelKey := fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID)
-			if err := al.RecordLastChannel(channelKey); err != nil {
-				logger.WarnCF("agent", "Failed to record last channel", map[string]any{"error": err.Error()})
+	// 0. Record last channel and session key for heartbeat (skip internal channels, skip heartbeat itself)
+	if opts.Channel != "" && opts.ChatID != "" && !constants.IsInternalChannel(opts.Channel) && !opts.NoHistory {
+		channelKey := fmt.Sprintf("%s:%s", opts.Channel, opts.ChatID)
+		if err := al.RecordLastChannel(channelKey); err != nil {
+			logger.WarnCF("agent", "Failed to record last channel", map[string]any{"error": err.Error()})
+		}
+		if opts.SessionKey != "" {
+			if err := al.RecordLastSessionKey(opts.SessionKey); err != nil {
+				logger.WarnCF("agent", "Failed to record last session key", map[string]any{"error": err.Error()})
 			}
 		}
 	}

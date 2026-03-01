@@ -96,6 +96,11 @@ func gatewayCmd(debug bool) error {
 		cfg.Heartbeat.Interval,
 		cfg.Heartbeat.Enabled,
 	)
+	heartbeatService.SetOptions(heartbeat.Options{
+		TargetChannel:    cfg.Heartbeat.TargetChannel,
+		PersistToSession: cfg.Heartbeat.PersistToSession,
+	})
+	heartbeatService.SetPersistCallback(agentLoop.PersistHeartbeatToSession)
 	heartbeatService.SetBus(msgBus)
 	heartbeatService.SetHandler(func(prompt, channel, chatID string) *tools.ToolResult {
 		// Use cli:direct as fallback if no valid channel

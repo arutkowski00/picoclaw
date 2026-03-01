@@ -15,11 +15,15 @@ import (
 // State represents the persistent state for a workspace.
 // It includes information about the last active channel/chat.
 type State struct {
-	// LastChannel is the last channel used for communication
+	// LastChannel is the last channel used for communication (format "platform:chat_id").
 	LastChannel string `json:"last_channel,omitempty"`
 
 	// LastChatID is the last chat ID used for communication
 	LastChatID string `json:"last_chat_id,omitempty"`
+
+	// LastSessionKey is the agent session key used for the last message.
+	// Used by heartbeat with persist_to_session to add responses to the correct session.
+	LastSessionKey string `json:"last_session_key,omitempty"`
 
 	// Timestamp is the last time this state was updated
 	Timestamp time.Time `json:"timestamp"`
@@ -114,6 +118,27 @@ func (sm *Manager) GetLastChatID() string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.state.LastChatID
+}
+
+// SetLastSessionKey atomically updates the last session key and saves the state.
+func (sm *Manager) SetLastSessionKey(sessionKey string) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	sm.state.LastSessionKey = sessionKey
+	sm.state.Timestamp = time.Now()
+
+	if err := sm.saveAtomic(); err != nil {
+		return fmt.Errorf("failed to save state atomically: %w", err)
+	}
+	return nil
+}
+
+// GetLastSessionKey returns the last session key from the state.
+func (sm *Manager) GetLastSessionKey() string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.state.LastSessionKey
 }
 
 // GetTimestamp returns the timestamp of the last state update.

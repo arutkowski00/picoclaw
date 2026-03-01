@@ -372,9 +372,20 @@ type PicoConfig struct {
 	Placeholder     PlaceholderConfig   `json:"placeholder,omitempty"`
 }
 
+// HeartbeatConfig configures the periodic heartbeat service.
 type HeartbeatConfig struct {
 	Enabled  bool `json:"enabled"  env:"PICOCLAW_HEARTBEAT_ENABLED"`
 	Interval int  `json:"interval" env:"PICOCLAW_HEARTBEAT_INTERVAL"` // minutes, min 5
+
+	// TargetChannel: optional. When set, heartbeat always sends here instead of last channel.
+	// Format "platform:chat_id" e.g. "telegram:-1001234567890" (group) or "telegram:12345" (DM).
+	// When empty, uses the last active channel (default).
+	TargetChannel string `json:"target_channel,omitempty" env:"PICOCLAW_HEARTBEAT_TARGET_CHANNEL"`
+
+	// PersistToSession: when true, heartbeat responses are added to the target's session history
+	// so the bot can recall them when the user refers to "what you said earlier".
+	// Uses LastSessionKey when sending to last channel, or derives from TargetChannel when set.
+	PersistToSession bool `json:"persist_to_session,omitempty" env:"PICOCLAW_HEARTBEAT_PERSIST_TO_SESSION"`
 }
 
 type DevicesConfig struct {

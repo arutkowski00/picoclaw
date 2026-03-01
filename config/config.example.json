@@ -251,7 +251,9 @@
   },
   "heartbeat": {
     "enabled": true,
-    "interval": 30
+    "interval": 30,
+    "target_channel": "",
+    "persist_to_session": false
   },
   "devices": {
     "enabled": false,

@@ -19,6 +19,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
@@ -30,19 +31,30 @@ const (
 
 // HeartbeatHandler is the function type for handling heartbeat.
 // It returns a ToolResult that can indicate async operations.
-// channel and chatID are derived from the last active user channel.
+// channel and chatID are derived from the last active user channel or target_channel.
 type HeartbeatHandler func(prompt, channel, chatID string) *tools.ToolResult
+
+// Options configures optional heartbeat behavior.
+type Options struct {
+	// TargetChannel: when set, heartbeat sends here instead of last channel.
+	// Format "platform:chat_id" e.g. "telegram:-1001234567890"
+	TargetChannel string
+	// PersistToSession: when true, heartbeat responses are added to target's session.
+	PersistToSession bool
+}
 
 // HeartbeatService manages periodic heartbeat checks
 type HeartbeatService struct {
-	workspace string
-	bus       *bus.MessageBus
-	state     *state.Manager
-	handler   HeartbeatHandler
-	interval  time.Duration
-	enabled   bool
-	mu        sync.RWMutex
-	stopChan  chan struct{}
+	workspace       string
+	bus             *bus.MessageBus
+	state           *state.Manager
+	handler         HeartbeatHandler
+	interval        time.Duration
+	enabled         bool
+	opts            Options
+	persistCallback func(sessionKey, content string)
+	mu              sync.RWMutex
+	stopChan        chan struct{}
 }
 
 // NewHeartbeatService creates a new heartbeat service
@@ -62,6 +74,21 @@ func NewHeartbeatService(workspace string, intervalMinutes int, enabled bool) *H
 		enabled:   enabled,
 		state:     state.NewManager(workspace),
 	}
+}
+
+// SetOptions sets optional heartbeat behavior (target channel, persist to session).
+func (hs *HeartbeatService) SetOptions(opts Options) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.opts = opts
+}
+
+// SetPersistCallback sets the function to call when persist_to_session is enabled.
+// The gateway provides this to add heartbeat responses to the target's session.
+func (hs *HeartbeatService) SetPersistCallback(fn func(sessionKey, content string)) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.persistCallback = fn
 }
 
 // SetBus sets the message bus for delivering heartbeat results.
@@ -149,6 +176,8 @@ func (hs *HeartbeatService) executeHeartbeat() {
 	hs.mu.RLock()
 	enabled := hs.enabled
 	handler := hs.handler
+	opts := hs.opts
+	persistCallback := hs.persistCallback
 	if !hs.enabled || hs.stopChan == nil {
 		hs.mu.RUnlock()
 		return
@@ -172,12 +201,17 @@ func (hs *HeartbeatService) executeHeartbeat() {
 		return
 	}
 
-	// Get last channel info for context
-	lastChannel := hs.state.GetLastChannel()
-	channel, chatID := hs.parseLastChannel(lastChannel)
-
-	// Debug log for channel resolution
-	hs.logInfof("Resolved channel: %s, chatID: %s (from lastChannel: %s)", channel, chatID, lastChannel)
+	// Resolve target: use target_channel if set, else last channel
+	var channel, chatID, channelKey string
+	if opts.TargetChannel != "" {
+		channel, chatID = hs.parseLastChannel(opts.TargetChannel)
+		channelKey = opts.TargetChannel
+	} else {
+		lastChannel := hs.state.GetLastChannel()
+		channel, chatID = hs.parseLastChannel(lastChannel)
+		channelKey = lastChannel
+	}
+	hs.logInfof("Resolved channel: %s, chatID: %s (from: %s)", channel, chatID, channelKey)
 
 	result := handler(prompt, channel, chatID)
 
@@ -208,13 +242,36 @@ func (hs *HeartbeatService) executeHeartbeat() {
 	}
 
 	// Send result to user
-	if result.ForUser != "" {
-		hs.sendResponse(result.ForUser)
-	} else if result.ForLLM != "" {
-		hs.sendResponse(result.ForLLM)
+	response := result.ForUser
+	if response == "" {
+		response = result.ForLLM
+	}
+	if response != "" {
+		hs.sendResponse(response, channelKey, channel, chatID)
+		// Persist to session so bot can recall heartbeat output
+		if opts.PersistToSession && persistCallback != nil {
+			useLastSessionKey := opts.TargetChannel == "" // last channel = we have LastSessionKey
+			sessionKey := hs.resolveSessionKey(useLastSessionKey, channel, chatID)
+			if sessionKey != "" {
+				persistCallback(sessionKey, response)
+			}
+		}
 	}
 
 	hs.logInfof("Heartbeat completed: %s", result.ForLLM)
+}
+
+// resolveSessionKey returns the session key for the target (for persist_to_session).
+func (hs *HeartbeatService) resolveSessionKey(useLastSessionKey bool, channel, chatID string) string {
+	if useLastSessionKey {
+		if k := hs.state.GetLastSessionKey(); k != "" {
+			return k
+		}
+	}
+	if channel != "" && chatID != "" {
+		return routing.BuildDefaultSessionKeyForTargetChannel(channel, chatID)
+	}
+	return ""
 }
 
 // buildPrompt builds the heartbeat prompt from HEARTBEAT.md
@@ -284,8 +341,9 @@ Add your heartbeat tasks below this line:
 	}
 }
 
-// sendResponse sends the heartbeat response to the last channel
-func (hs *HeartbeatService) sendResponse(response string) {
+// sendResponse sends the heartbeat response to the target.
+// channelKey is "platform:chat_id" (from last channel or target_channel config).
+func (hs *HeartbeatService) sendResponse(response, channelKey, platform, chatID string) {
 	hs.mu.RLock()
 	msgBus := hs.bus
 	hs.mu.RUnlock()
@@ -295,17 +353,19 @@ func (hs *HeartbeatService) sendResponse(response string) {
 		return
 	}
 
-	// Get last channel from state
-	lastChannel := hs.state.GetLastChannel()
-	if lastChannel == "" {
-		hs.logInfof("No last channel recorded, heartbeat result not sent")
-		return
+	if platform == "" || chatID == "" {
+		if channelKey != "" {
+			platform, chatID = hs.parseLastChannel(channelKey)
+		}
+		if platform == "" || chatID == "" {
+			hs.logInfof("No target channel (last channel empty or target_channel invalid)")
+			return
+		}
 	}
 
-	platform, userID := hs.parseLastChannel(lastChannel)
-
 	// Skip internal channels that can't receive messages
-	if platform == "" || userID == "" {
+	if constants.IsInternalChannel(platform) {
+		hs.logInfof("Skipping internal channel: %s", platform)
 		return
 	}
 
@@ -313,7 +373,7 @@ func (hs *HeartbeatService) sendResponse(response string) {
 	defer pubCancel()
 	msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
 		Channel: platform,
-		ChatID:  userID,
+		ChatID:  chatID,
 		Content: response,
 	})
 

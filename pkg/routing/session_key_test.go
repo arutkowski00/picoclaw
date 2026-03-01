@@ -71,6 +71,25 @@ func TestBuildAgentPeerSessionKey_DMScopePerAccountChannelPeer(t *testing.T) {
 	}
 }
 
+func TestBuildDefaultSessionKeyForTargetChannel(t *testing.T) {
+	tests := []struct {
+		platform string
+		chatID   string
+		want     string
+	}{
+		{"telegram", "-1001234567890", "agent:main:telegram:group:-1001234567890"},
+		{"telegram", "12345", "agent:main:telegram:direct:12345"},
+		{"discord", "987654321", "agent:main:discord:channel:987654321"},
+	}
+	for _, tt := range tests {
+		got := BuildDefaultSessionKeyForTargetChannel(tt.platform, tt.chatID)
+		if got != tt.want {
+			t.Errorf("BuildDefaultSessionKeyForTargetChannel(%q, %q) = %q, want %q",
+				tt.platform, tt.chatID, got, tt.want)
+		}
+	}
+}
+
 func TestBuildAgentPeerSessionKey_GroupPeer(t *testing.T) {
 	got := BuildAgentPeerSessionKey(SessionKeyParams{
 		AgentID: "main",

@@ -144,6 +144,27 @@ func normalizeChannel(channel string) string {
 	return c
 }
 
+// BuildDefaultSessionKeyForTargetChannel builds a session key for "platform:chat_id" format.
+// Used by heartbeat when targeting a specific channel with persist_to_session.
+// Infers peer kind from chat ID where possible (e.g. Telegram: negative ID = group).
+func BuildDefaultSessionKeyForTargetChannel(platform, chatID string) string {
+	platform = normalizeChannel(platform)
+	chatID = strings.TrimSpace(chatID)
+	if platform == "" || chatID == "" {
+		return ""
+	}
+	peerKind := "direct"
+	// Telegram: negative IDs are groups/supergroups
+	if platform == "telegram" && len(chatID) > 0 && chatID[0] == '-' {
+		peerKind = "group"
+	}
+	// Discord: uses "channel" for both; chatID is channel ID (guild channels are snowflakes)
+	if platform == "discord" {
+		peerKind = "channel"
+	}
+	return fmt.Sprintf("agent:main:%s:%s:%s", platform, peerKind, strings.ToLower(chatID))
+}
+
 func resolveLinkedPeerID(identityLinks map[string][]string, channel, peerID string) string {
 	if len(identityLinks) == 0 {
 		return ""
