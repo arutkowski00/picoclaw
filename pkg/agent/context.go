@@ -89,7 +89,7 @@ Your workspace is at: %s
    Do NOT use edit_file or write_file on memory files — always use the appropriate tool. Do this without being asked; do not wait for the user to say "remember this."
 
 4. **Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.`,
-		workspacePath, workspacePath, workspacePath, workspacePath, workspacePath)
+		workspacePath, workspacePath, workspacePath, workspacePath)
 }
 
 func (cb *ContextBuilder) BuildSystemPrompt() string {
