@@ -459,8 +459,9 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 	}
 
 	// In group chats, apply unified group trigger filtering
+	isMentioned := false
 	if message.Chat.Type != "private" {
-		isMentioned := c.isBotMentioned(message)
+		isMentioned = c.isBotMentioned(message)
 		if isMentioned {
 			content = c.stripBotMention(content)
 		}
@@ -510,6 +511,7 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 		"username":   user.Username,
 		"first_name": user.FirstName,
 		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
+		"is_mentioned": fmt.Sprintf("%t", isMentioned),
 	}
 
 	c.HandleMessage(c.ctx,

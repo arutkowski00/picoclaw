@@ -74,18 +74,20 @@ type channelWorker struct {
 }
 
 type Manager struct {
-	channels      map[string]Channel
-	workers       map[string]*channelWorker
-	bus           *bus.MessageBus
-	config        *config.Config
-	mediaStore    media.MediaStore
-	dispatchTask  *asyncTask
-	mux           *http.ServeMux
-	httpServer    *http.Server
-	mu            sync.RWMutex
-	placeholders  sync.Map // "channel:chatID" → placeholderID (string)
-	typingStops   sync.Map // "channel:chatID" → func()
-	reactionUndos sync.Map // "channel:chatID" → reactionEntry
+	channels         map[string]Channel
+	workers          map[string]*channelWorker
+	bus              *bus.MessageBus
+	config           *config.Config
+	mediaStore       media.MediaStore
+	dispatchTask     *asyncTask
+	mux              *http.ServeMux
+	httpServer       *http.Server
+	mu               sync.RWMutex
+	placeholders     sync.Map // "channel:chatID" → placeholderID (string)
+	typingStops      sync.Map // "channel:chatID" → func()
+	reactionUndos    sync.Map // "channel:chatID" → reactionEntry
+	debouncer        *GroupDebouncer
+	debouncedInbound chan bus.InboundMessage
 }
 
 type asyncTask struct {
@@ -154,6 +156,11 @@ func NewManager(cfg *config.Config, messageBus *bus.MessageBus, store media.Medi
 		bus:        messageBus,
 		config:     cfg,
 		mediaStore: store,
+	}
+
+	if cfg.Debounce.Enabled {
+		m.debouncer = NewGroupDebouncer(cfg.Debounce)
+		m.debouncedInbound = make(chan bus.InboundMessage, 64)
 	}
 
 	if err := m.initChannels(); err != nil {
@@ -350,6 +357,28 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	// Start the TTL janitor that cleans up stale typing/placeholder entries
 	go m.runTTLJanitor(dispatchCtx)
 
+	// Start debounce relay goroutines if enabled
+	if m.config.Debounce.Enabled {
+		go func() {
+			for {
+				msg, ok := m.bus.ConsumeInbound(dispatchCtx)
+				if !ok {
+					return
+				}
+				m.debouncer.HandleMessage(msg)
+			}
+		}()
+		go func() {
+			for msg := range m.debouncer.FlushChan() {
+				select {
+				case m.debouncedInbound <- msg:
+				case <-dispatchCtx.Done():
+					return
+				}
+			}
+		}()
+	}
+
 	// Start shared HTTP server if configured
 	if m.httpServer != nil {
 		go func() {
@@ -390,6 +419,10 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	if m.dispatchTask != nil {
 		m.dispatchTask.cancel()
 		m.dispatchTask = nil
+
+	if m.debouncer != nil {
+		m.debouncer.Close()
+	}
 	}
 
 	// Close all worker queues and wait for them to drain
@@ -429,6 +462,15 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	}
 
 	logger.InfoC("channels", "All channels stopped")
+	return nil
+}
+
+// InboundChan returns the debounced inbound channel when debounce is enabled,
+// or nil when disabled (agent reads from bus directly in that case).
+func (m *Manager) InboundChan() <-chan bus.InboundMessage {
+	if m.config.Debounce.Enabled {
+		return m.debouncedInbound
+	}
 	return nil
 }
 

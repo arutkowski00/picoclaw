@@ -42,6 +42,26 @@ type AgentLoop struct {
 	fallback       *providers.FallbackChain
 	channelManager *channels.Manager
 	mediaStore     media.MediaStore
+	inboundOverride <-chan bus.InboundMessage
+}
+
+// SetInboundOverride configures an alternative inbound channel (used by debounce relay).
+// When set, Run() reads from this channel instead of the bus directly.
+func (al *AgentLoop) SetInboundOverride(ch <-chan bus.InboundMessage) {
+	al.inboundOverride = ch
+}
+
+// consumeInbound reads from inboundOverride if set, otherwise from the bus.
+func (al *AgentLoop) consumeInbound(ctx context.Context) (bus.InboundMessage, bool) {
+	if al.inboundOverride != nil {
+		select {
+		case msg, ok := <-al.inboundOverride:
+			return msg, ok
+		case <-ctx.Done():
+			return bus.InboundMessage{}, false
+		}
+	}
+	return al.bus.ConsumeInbound(ctx)
 }
 
 // processOptions configures how a message is processed
@@ -189,7 +209,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			//      already completed before it is called, so any subsequent message's buildMessages()
 			//      will always see the prior message's response in the persistent session history.
 			// Result: no locking or additional synchronization is needed for per-chat ordering.
-			msg, ok := al.bus.ConsumeInbound(ctx)
+			msg, ok := al.consumeInbound(ctx)
 			if !ok {
 				continue
 			}
@@ -1347,6 +1367,9 @@ func (al *AgentLoop) summarizeBatch(
 	for _, m := range batch {
 		fmt.Fprintf(&sb, "%s: %s\n", m.Role, m.Content)
 	}
+	if al.cfg != nil && al.cfg.MemorySleep.Enabled {
+		sb.WriteString("\nAdditionally, extract up to 5 memorable facts, decisions, or user preferences from this conversation. Output them as a [MEMORIES] block at the END of your response:\n[MEMORIES]\nkey: value\n[/MEMORIES]\nStrip the [MEMORIES] block from your summary text (it is separate metadata).\n")
+	}
 	prompt := sb.String()
 
 	response, err := agent.Provider.Chat(
@@ -1363,7 +1386,51 @@ func (al *AgentLoop) summarizeBatch(
 	if err != nil {
 		return "", err
 	}
-	return response.Content, nil
+	content := response.Content
+	if al.cfg != nil && al.cfg.MemorySleep.Enabled {
+		content = extractAndStoreMemories(content, agent.Workspace)
+	}
+	return content, nil
+}
+
+// extractAndStoreMemories finds a [MEMORIES]...[/MEMORIES] block in content,
+// writes each line (up to 5) to today's daily note via MemoryStore, and returns
+// the content with the block stripped. Uses plain string search — no regexp.
+func extractAndStoreMemories(content, workspace string) string {
+	const openTag = "[MEMORIES]"
+	const closeTag = "[/MEMORIES]"
+	start := strings.Index(content, openTag)
+	if start == -1 {
+		return content
+	}
+	end := strings.Index(content[start:], closeTag)
+	if end == -1 {
+		return content
+	}
+	end += start
+
+	inner := content[start+len(openTag) : end]
+	lines := strings.Split(inner, "\n")
+	count := 0
+	ms := NewMemoryStore(workspace)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if count >= 5 {
+			break
+		}
+		if err := ms.AppendToday(line); err != nil {
+			logger.WarnCF("agent", "Failed to append memory from compaction",
+				map[string]any{"error": err.Error()})
+		}
+		count++
+	}
+
+	// Strip the [MEMORIES]...[/MEMORIES] block from returned summary.
+	cleaned := strings.TrimSpace(content[:start] + content[end+len(closeTag):])
+	return cleaned
 }
 
 // estimateTokens estimates the number of tokens in a message list.
