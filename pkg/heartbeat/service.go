@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -49,8 +50,9 @@ type Options struct {
 	// ConsolidationInterval: how many heartbeat cycles between consolidation runs.
 	// Default 4 (~2h at 30-min interval). 0 disables consolidation.
 	ConsolidationInterval int
+	// MemorySleepEnabled: when true, run the nightly memory sleep job.
+	MemorySleepEnabled bool
 }
-
 // CatchupChecker returns (hasUnaddressed, sessionKey) for a channel:chatID.
 // Used when catchup_enabled to detect user messages after last assistant.
 type CatchupChecker func(channel, chatID string) (hasUnaddressed bool, sessionKey string)
@@ -69,6 +71,8 @@ type HeartbeatService struct {
 	mu              sync.RWMutex
 	heartbeatCount  int
 	stopChan        chan struct{}
+	memorySleep     *MemorySleepService
+	memorySleepCfg  config.MemorySleepConfig
 }
 
 // NewHeartbeatService creates a new heartbeat service
@@ -127,6 +131,13 @@ func (hs *HeartbeatService) SetCatchupChecker(fn CatchupChecker) {
 	hs.catchupChecker = fn
 }
 
+// SetMemorySleepConfig sets the memory sleep configuration.
+func (hs *HeartbeatService) SetMemorySleepConfig(cfg config.MemorySleepConfig) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.memorySleepCfg = cfg
+}
+
 // Start begins the heartbeat service
 func (hs *HeartbeatService) Start() error {
 	hs.mu.Lock()
@@ -142,6 +153,8 @@ func (hs *HeartbeatService) Start() error {
 		return nil
 	}
 
+	// Initialize memorySleep service.
+	hs.memorySleep = NewMemorySleepService(hs.workspace)
 	hs.stopChan = make(chan struct{})
 	go hs.runLoop(hs.stopChan)
 
@@ -258,6 +271,18 @@ func (hs *HeartbeatService) executeHeartbeat() {
 	if opts.ConsolidationEnabled && opts.ConsolidationInterval > 0 &&
 		count%opts.ConsolidationInterval == 0 {
 		hs.fireConsolidation(handler)
+	}
+	if opts.MemorySleepEnabled && hs.memorySleep != nil {
+		hs.mu.RLock()
+		msConfig := hs.memorySleepCfg
+		hs.mu.RUnlock()
+		if hs.memorySleep.ShouldFire(msConfig, time.Now()) {
+			channel, chatID := hs.parseLastChannel(opts.TargetChannel)
+			if channel == "" {
+				channel, chatID = "cli", "direct"
+			}
+			hs.memorySleep.Fire(handler, channel, chatID)
+		}
 	}
 
 	logger.DebugC("heartbeat", "Executing heartbeat")

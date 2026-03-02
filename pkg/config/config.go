@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"os"
 	"sync/atomic"
-
+	"time"
+	
 	"github.com/caarlos0/env/v11"
-
+	
 	"github.com/sipeed/picoclaw/pkg/fileutil"
 )
 
@@ -57,6 +58,8 @@ type Config struct {
 	Gateway   GatewayConfig   `json:"gateway"`
 	Tools     ToolsConfig     `json:"tools"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"`
+	MemorySleep  MemorySleepConfig  `json:"memory_sleep"`
+	Debounce     DebounceConfig     `json:"debounce"`
 	Devices   DevicesConfig   `json:"devices"`
 }
 
@@ -412,6 +415,20 @@ type HeartbeatConfig struct {
 	// ConsolidationInterval: how many heartbeat cycles between consolidation
 	// runs. Default 4 (e.g. every 2h if interval=30min). 0 disables.
 	ConsolidationInterval int  `json:"consolidation_interval,omitempty" env:"PICOCLAW_HEARTBEAT_CONSOLIDATION_INTERVAL"`
+}
+
+// DebounceConfig configures request debouncing.
+type DebounceConfig struct {
+	Enabled   bool          `json:"enabled"  env:"PICOCLAW_DEBOUNCE_ENABLED"`
+	Window    time.Duration `json:"window"     env:"PICOCLAW_DEBOUNCE_WINDOW"`
+	MaxWindow time.Duration `json:"max_window" env:"PICOCLAW_DEBOUNCE_MAX_WINDOW"`
+}
+
+// MemorySleepConfig configures scheduled memory sleep periods.
+type MemorySleepConfig struct {
+	Enabled   bool   `json:"enabled"     env:"PICOCLAW_MEMORY_SLEEP_ENABLED"`
+	Interval  int    `json:"interval"    env:"PICOCLAW_MEMORY_SLEEP_INTERVAL"`
+	TimeOfDay string `json:"time_of_day" env:"PICOCLAW_MEMORY_SLEEP_TIME_OF_DAY"`
 }
 
 type DevicesConfig struct {

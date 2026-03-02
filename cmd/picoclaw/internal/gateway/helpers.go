@@ -102,7 +102,9 @@ func gatewayCmd(debug bool) error {
 		CatchupEnabled:        cfg.Heartbeat.CatchupEnabled,
 		ConsolidationEnabled:  cfg.Heartbeat.ConsolidationEnabled,
 		ConsolidationInterval: consolidationInterval(cfg.Heartbeat.ConsolidationInterval),
+		MemorySleepEnabled:    cfg.MemorySleep.Enabled,
 	})
+	heartbeatService.SetMemorySleepConfig(cfg.MemorySleep)
 	heartbeatService.SetCatchupChecker(agentLoop.HasUnaddressedMessages)
 	heartbeatService.SetPersistCallback(agentLoop.PersistHeartbeatToSession)
 	heartbeatService.SetBus(msgBus)
