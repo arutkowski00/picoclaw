@@ -419,9 +419,11 @@ type HeartbeatConfig struct {
 
 // DebounceConfig configures request debouncing.
 type DebounceConfig struct {
-	Enabled   bool          `json:"enabled"  env:"PICOCLAW_DEBOUNCE_ENABLED"`
-	Window    time.Duration `json:"window"     env:"PICOCLAW_DEBOUNCE_WINDOW"`
-	MaxWindow time.Duration `json:"max_window" env:"PICOCLAW_DEBOUNCE_MAX_WINDOW"`
+	Enabled            bool          `json:"enabled"  env:"PICOCLAW_DEBOUNCE_ENABLED"`
+	Window             time.Duration `json:"window"     env:"PICOCLAW_DEBOUNCE_WINDOW"`
+	MaxWindow          time.Duration `json:"max_window" env:"PICOCLAW_DEBOUNCE_MAX_WINDOW"`
+	IncludedChannelIDs []string      `json:"included_channel_ids,omitempty" env:"PICOCLAW_DEBOUNCE_INCLUDED_CHANNEL_IDS"`
+	ExcludedChannelIDs []string      `json:"excluded_channel_ids,omitempty" env:"PICOCLAW_DEBOUNCE_EXCLUDED_CHANNEL_IDS"`
 }
 
 // MemorySleepConfig configures scheduled memory sleep periods.
