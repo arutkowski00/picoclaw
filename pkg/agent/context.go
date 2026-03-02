@@ -34,6 +34,11 @@ type ContextBuilder struct {
 	// created (didn't exist at cache time, now exist) or deleted (existed at
 	// cache time, now gone) — both of which should trigger a cache rebuild.
 	existedAtCache map[string]bool
+
+	// channelMtimes tracks per-channel last-seen file mtimes for cross-channel
+	// file change awareness. Maps channelID -> (filePath -> lastSeenMtime).
+	channelMtimes   map[string]map[string]time.Time
+	channelMtimesMu sync.Mutex
 }
 
 func getGlobalConfigDir() string {
@@ -52,9 +57,10 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 	globalSkillsDir := filepath.Join(getGlobalConfigDir(), "skills")
 
 	return &ContextBuilder{
-		workspace:    workspace,
-		skillsLoader: skills.NewSkillsLoader(workspace, globalSkillsDir, builtinSkillsDir),
-		memory:       NewMemoryStore(workspace),
+		workspace:     workspace,
+		skillsLoader:  skills.NewSkillsLoader(workspace, globalSkillsDir, builtinSkillsDir),
+		memory:        NewMemoryStore(workspace),
+		channelMtimes: make(map[string]map[string]time.Time),
 	}
 }
 
@@ -394,6 +400,82 @@ func (cb *ContextBuilder) buildDynamicContext(channel, chatID string) string {
 	return sb.String()
 }
 
+// CrossChannelNotice returns a system notice string if workspace files have
+// changed since this channel last observed them. Returns empty string if:
+//   - channel's snapshot is up to date (self-suppression for the writing channel)
+//   - channel's snapshot is older than 24h (stale, suppress to avoid spam)
+//   - no files have changed
+//
+// After returning a non-empty notice, the per-channel snapshot is updated so
+// the same channel won't receive the same notice again.
+func (cb *ContextBuilder) CrossChannelNotice(channelID string) string {
+	if channelID == "" {
+		return ""
+	}
+
+	cb.channelMtimesMu.Lock()
+	defer cb.channelMtimesMu.Unlock()
+
+	// Sample current mtimes for all tracked paths.
+	paths := cb.sourcePaths()
+	currentMtimes := make(map[string]time.Time, len(paths))
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err == nil {
+			currentMtimes[p] = info.ModTime()
+		}
+	}
+
+	// Get or initialize this channel's snapshot.
+	snap, exists := cb.channelMtimes[channelID]
+	if !exists {
+		// First time we see this channel: record current state, no notice.
+		cb.channelMtimes[channelID] = currentMtimes
+		return ""
+	}
+
+	// 24h expiry: find the newest mtime in the snapshot to determine snapshot age.
+	// We use the newest snapshot mtime as a proxy for when this channel last
+	// interacted. If all tracked files are gone (empty workspace), treat as fresh.
+	var snapshotAge time.Time
+	for _, t := range snap {
+		if t.After(snapshotAge) {
+			snapshotAge = t
+		}
+	}
+	// Also check: if snapshotAge is zero (no files existed), the snapshot was
+	// just initialized — treat as current.
+	if !snapshotAge.IsZero() && time.Since(snapshotAge) > 24*time.Hour {
+		// Stale snapshot: update silently, no notice.
+		cb.channelMtimes[channelID] = currentMtimes
+		return ""
+	}
+
+	// Find files changed since this channel's last snapshot.
+	var changedFiles []string
+	for _, p := range paths {
+		currentMtime, existsNow := currentMtimes[p]
+		snapMtime, hadBefore := snap[p]
+		// Change = file appeared, disappeared, or mtime advanced.
+		if existsNow != hadBefore || (existsNow && currentMtime.After(snapMtime)) {
+			changedFiles = append(changedFiles, filepath.Base(p))
+		}
+	}
+
+	if len(changedFiles) == 0 {
+		// No changes; still update snapshot to reflect current state.
+		cb.channelMtimes[channelID] = currentMtimes
+		return ""
+	}
+
+	// Update snapshot so this channel won't get the same notice again.
+	cb.channelMtimes[channelID] = currentMtimes
+
+	// Build and return the notice.
+	return "[System Notice: Workspace files were updated since your last interaction. Changed files: " +
+		strings.Join(changedFiles, ", ") + "]"
+}
+
 func (cb *ContextBuilder) BuildMessages(
 	history []providers.Message,
 	summary string,
@@ -471,6 +553,15 @@ func (cb *ContextBuilder) BuildMessages(
 		})
 
 	history = sanitizeHistoryForProvider(history)
+
+	// Inject cross-channel notice as system message at position 0 (if applicable).
+	// This informs the current channel that workspace files changed in another channel.
+	if notice := cb.CrossChannelNotice(channel + ":" + chatID); notice != "" {
+		messages = append(messages, providers.Message{
+			Role:    "system",
+			Content: notice,
+		})
+	}
 
 	// Single system message containing all context — compatible with all providers.
 	// SystemParts enables cache-aware adapters to set per-block cache_control;
