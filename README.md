@@ -305,7 +305,7 @@ Talk to your picoclaw through Telegram, Discord, WhatsApp, DingTalk, LINE, or We
 | **QQ**       | Easy (AppID + AppSecret)           |
 | **DingTalk** | Medium (app credentials)           |
 | **LINE**     | Medium (credentials + webhook URL) |
-| **WeCom**    | Medium (CorpID + webhook setup)    |
+| **WeCom AI Bot** | Medium (Token + AES key)       |
 
 <details>
 <summary><b>Telegram</b> (Recommended)</summary>
@@ -557,12 +557,13 @@ picoclaw gateway
 <details>
 <summary><b>WeCom (企业微信)</b></summary>
 
-PicoClaw supports two types of WeCom integration:
+PicoClaw supports three types of WeCom integration:
 
-**Option 1: WeCom Bot (智能机器人)** - Easier setup, supports group chats
-**Option 2: WeCom App (自建应用)** - More features, proactive messaging
+**Option 1: WeCom Bot (Bot)** - Easier setup, supports group chats
+**Option 2: WeCom App (Custom App)** - More features, proactive messaging, private chat only
+**Option 3: WeCom AI Bot (AI Bot)** - Official AI Bot, streaming replies, supports group & private chat
 
-See [WeCom App Configuration Guide](docs/wecom-app-configuration.md) for detailed setup instructions.
+See [WeCom AI Bot Configuration Guide](docs/channels/wecom/wecom_aibot/README.zh.md) for detailed setup instructions.
 
 **Quick Setup - WeCom Bot:**
 
@@ -631,6 +632,39 @@ picoclaw gateway
 
 > **Note**: WeCom webhook callbacks are served on the Gateway port (default 18790). Use a reverse proxy for HTTPS.
 
+**Quick Setup - WeCom AI Bot:**
+
+**1. Create an AI Bot**
+
+* Go to WeCom Admin Console → App Management → AI Bot
+* In the AI Bot settings, configure callback URL: `http://your-server:18791/webhook/wecom-aibot`
+* Copy **Token** and click "Random Generate" for **EncodingAESKey**
+
+**2. Configure**
+
+```json
+{
+  "channels": {
+    "wecom_aibot": {
+      "enabled": true,
+      "token": "YOUR_TOKEN",
+      "encoding_aes_key": "YOUR_43_CHAR_ENCODING_AES_KEY",
+      "webhook_path": "/webhook/wecom-aibot",
+      "allow_from": [],
+      "welcome_message": "Hello! How can I help you?"
+    }
+  }
+}
+```
+
+**3. Run**
+
+```bash
+picoclaw gateway
+```
+
+> **Note**: WeCom AI Bot uses streaming pull protocol — no reply timeout concerns. Long tasks (>30 seconds) automatically switch to `response_url` push delivery.
+
 </details>
 
 ## <img src="assets/clawdchat-icon.png" width="24" height="24" alt="ClawdChat"> Join the Agent Social Network
@@ -642,6 +676,31 @@ Connect Picoclaw to the Agent Social Network simply by sending a single message 
 ## ⚙️ Configuration
 
 Config file: `~/.picoclaw/config.json`
+
+### Environment Variables
+
+You can override default paths using environment variables. This is useful for portable installations, containerized deployments, or running picoclaw as a system service. These variables are independent and control different paths.
+
+| Variable          | Description                                                                                                                             | Default Path              |
+|-------------------|-----------------------------------------------------------------------------------------------------------------------------------------|---------------------------|
+| `PICOCLAW_CONFIG` | Overrides the path to the configuration file. This directly tells picoclaw which `config.json` to load, ignoring all other locations. | `~/.picoclaw/config.json` |
+| `PICOCLAW_HOME`   | Overrides the root directory for picoclaw data. This changes the default location of the `workspace` and other data directories.          | `~/.picoclaw`             |
+
+**Examples:**
+
+```bash
+# Run picoclaw using a specific config file
+# The workspace path will be read from within that config file
+PICOCLAW_CONFIG=/etc/picoclaw/production.json picoclaw gateway
+
+# Run picoclaw with all its data stored in /opt/picoclaw
+# Config will be loaded from the default ~/.picoclaw/config.json
+# Workspace will be created at /opt/picoclaw/workspace
+PICOCLAW_HOME=/opt/picoclaw picoclaw agent
+
+# Use both for a fully customized setup
+PICOCLAW_HOME=/srv/picoclaw PICOCLAW_CONFIG=/srv/picoclaw/main.json picoclaw gateway
+```
 
 ### Workspace Layout
 
