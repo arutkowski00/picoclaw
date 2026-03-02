@@ -8,6 +8,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // DefaultConfig returns the default configuration for PicoClaw.
@@ -365,6 +366,16 @@ func DefaultConfig() *Config {
 		Heartbeat: HeartbeatConfig{
 			Enabled:  true,
 			Interval: 30,
+		},
+		Debounce: DebounceConfig{
+			Enabled:   false,
+			Window:    30 * time.Second,
+			MaxWindow: 60 * time.Second,
+		},
+		MemorySleep: MemorySleepConfig{
+			Enabled:   true,
+			Interval:  24,
+			TimeOfDay: "03:00",
 		},
 		Devices: DevicesConfig{
 			Enabled:    false,
