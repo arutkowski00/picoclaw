@@ -426,6 +426,40 @@ type DebounceConfig struct {
 	ExcludedChannelIDs []string      `json:"excluded_channel_ids,omitempty" env:"PICOCLAW_DEBOUNCE_EXCLUDED_CHANNEL_IDS"`
 }
 
+// UnmarshalJSON implements custom JSON unmarshaling for DebounceConfig
+// to handle time.Duration string fields.
+func (d *DebounceConfig) UnmarshalJSON(data []byte) error {
+	type Alias DebounceConfig
+	aux := &struct {
+		Window  string `json:"window"`
+		MaxWindow string `json:"max_window"`
+		*Alias
+	}{
+		Alias: (*Alias)(d),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	if aux.Window != "" {
+		var err error
+		d.Window, err = time.ParseDuration(aux.Window)
+		if err != nil {
+			return fmt.Errorf("invalid debounce window: %w", err)
+		}
+	}
+
+	if aux.MaxWindow != "" {
+		var err error
+		d.MaxWindow, err = time.ParseDuration(aux.MaxWindow)
+		if err != nil {
+			return fmt.Errorf("invalid debounce max_window: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // MemorySleepConfig configures scheduled memory sleep periods.
 type MemorySleepConfig struct {
 	Enabled   bool   `json:"enabled"     env:"PICOCLAW_MEMORY_SLEEP_ENABLED"`
