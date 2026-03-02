@@ -16,10 +16,10 @@ import (
 
 // debounceEntry holds buffered messages and timers for a single group chat key.
 type debounceEntry struct {
-	msgs      []bus.InboundMessage
-	timer     *time.Timer // fires after Window of inactivity
-	maxTimer  *time.Timer // fires after MaxWindow from first message
-	key       string
+	msgs     []bus.InboundMessage
+	timer    *time.Timer // fires after Window of inactivity
+	maxTimer *time.Timer // fires after MaxWindow from first message
+	key      string
 }
 
 // GroupDebouncer delays processing of group chat messages by a configurable
@@ -85,40 +85,6 @@ func (d *GroupDebouncer) shouldDebounceForChat(channel, chatID string) bool {
 // - If the message is @mentioned: flush the buffered entry immediately.
 // - Otherwise: buffer the message and reset the Window timer.
 func (d *GroupDebouncer) HandleMessage(msg bus.InboundMessage) {
-	// Pass-through: debounce disabled or not a group message
-	if !d.cfg.Enabled || msg.Peer.Kind != "group" {
-		select {
-		case d.flushChan <- msg:
-		case <-d.stopCh:
-		}
-		return
-	}
-
-	// Pass-through: chat not in include list or in exclude list
-	if !d.shouldDebounceForChat(msg.Channel, msg.ChatID) {
-		select {
-		case d.flushChan <- msg:
-		case <-d.stopCh:
-		}
-		return
-	}
-
-	// Pass-through: @mentioned messages flush immediately
-	if msg.Metadata["is_mentioned"] == "true" {
-		key := msg.Channel + ":" + msg.ChatID
-		d.mu.Lock()
-		if entry, ok := d.entries[key]; ok {
-			// Cancel pending timers and flush buffered messages first, then flush this one
-			d.flushEntryLocked(key, entry)
-		}
-		d.mu.Unlock()
-		// Send the mention message directly, without buffering
-		select {
-		case d.flushChan <- msg:
-		case <-d.stopCh:
-		}
-		return
-	}
 	// Pass-through: debounce disabled or not a group message
 	if !d.cfg.Enabled || msg.Peer.Kind != "group" {
 		select {
