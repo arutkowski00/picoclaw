@@ -145,9 +145,13 @@ func gatewayCmd(debug bool) error {
 	agentLoop.SetChannelManager(channelManager)
 	agentLoop.SetMediaStore(mediaStore)
 
+	// Wire debounced inbound channel when debounce is enabled
+	if cfg.Debounce.Enabled {
+		agentLoop.SetInboundOverride(channelManager.InboundChan())
+	}
+
 	enabledChannels := channelManager.GetEnabledChannels()
 	if len(enabledChannels) > 0 {
-		fmt.Printf("✓ Channels enabled: %s\n", enabledChannels)
 	} else {
 		fmt.Println("⚠ Warning: No channels enabled")
 	}
