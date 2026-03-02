@@ -7,6 +7,7 @@
 package channels
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -479,4 +480,200 @@ func TestGroupDebouncer_MentionBypassesExcludeList(t *testing.T) {
 	if got.MessageID != "id2" {
 		t.Errorf("expected message id2, got %q", got.MessageID)
 	}
+}
+
+
+// TestGroupDebouncer_EmptyIncludeListDebouncesAll verifies that an empty included list
+// (after initialization) still debounces all group messages.
+func TestGroupDebouncer_EmptyIncludeListDebouncesAll(t *testing.T) {
+	window := 30 * time.Millisecond
+	d := NewGroupDebouncer(config.DebounceConfig{
+		Enabled:            true,
+		Window:             window,
+		MaxWindow:          500 * time.Millisecond,
+		IncludedChannelIDs: []string{}, // empty - should debounce all
+	})
+	defer d.Close()
+
+	ch := d.FlushChan()
+
+	// Message should be debounced (not pass through immediately)
+	msg := makeGroupMsg("tg", "anyChat", "hello", "id1")
+	d.HandleMessage(msg)
+
+	// Should NOT arrive immediately
+	expectNoMessage(t, ch, 10*time.Millisecond)
+
+	// Should arrive after window
+	got, ok := drainOne(t, ch, 100*time.Millisecond)
+	if !ok {
+		t.Fatal("group message should be flushed after Window, got timeout")
+	}
+	if got.MessageID != "id1" {
+		t.Errorf("expected message id1, got %q", got.MessageID)
+	}
+}
+
+// TestGroupDebouncer_IncludeAndExcludeBothSet verifies that when both lists are set,
+// included takes precedence (whitelist mode).
+func TestGroupDebouncer_IncludeAndExcludeBothSet(t *testing.T) {
+	window := 30 * time.Millisecond
+	d := NewGroupDebouncer(config.DebounceConfig{
+		Enabled:            true,
+		Window:             window,
+		MaxWindow:          500 * time.Millisecond,
+		IncludedChannelIDs: []string{"tg:chat1"}, // only chat1 should debounce
+		ExcludedChannelIDs: []string{"tg:chat2"}, // chat2 in exclude, but not in include
+	})
+	defer d.Close()
+
+	ch := d.FlushChan()
+
+	// chat1 is in include list - should debounce
+	msg1 := makeGroupMsg("tg", "chat1", "hello", "id1")
+	d.HandleMessage(msg1)
+	expectNoMessage(t, ch, 10*time.Millisecond)
+
+	// chat2 is in exclude list but NOT in include - should pass through
+	msg2 := makeGroupMsg("tg", "chat2", "world", "id2")
+	d.HandleMessage(msg2)
+
+	got, ok := drainOne(t, ch, 50*time.Millisecond)
+	if !ok {
+		t.Fatal("chat2 should pass through (not in include list), got timeout")
+	}
+	if got.MessageID != "id2" {
+		t.Errorf("expected message id2, got %q", got.MessageID)
+	}
+
+	// chat1 should still flush after window
+	got, ok = drainOne(t, ch, 100*time.Millisecond)
+	if !ok {
+		t.Fatal("chat1 should be flushed after Window, got timeout")
+	}
+	if got.MessageID != "id1" {
+		t.Errorf("expected message id1, got %q", got.MessageID)
+	}
+}
+
+// TestGroupDebouncer_DifferentChannelsIndependent verifies that messages from different
+// channels (e.g., telegram vs discord) are tracked independently.
+func TestGroupDebouncer_DifferentChannelsIndependent(t *testing.T) {
+	window := 30 * time.Millisecond
+	d := NewGroupDebouncer(config.DebounceConfig{
+		Enabled:   true,
+		Window:    window,
+		MaxWindow: 500 * time.Millisecond,
+	})
+	defer d.Close()
+
+	ch := d.FlushChan()
+
+	// Two messages in different channels, same chat ID
+	msgTg := makeGroupMsg("telegram", "chat123", "hello from tg", "id-tg")
+	msgDc := makeGroupMsg("discord", "chat123", "hello from dc", "id-dc")
+
+	d.HandleMessage(msgTg)
+	d.HandleMessage(msgDc)
+
+	// Both should arrive after window (different channels = different buffers)
+	received := make(map[string]string)
+	for i := 0; i < 2; i++ {
+		got, ok := drainOne(t, ch, 100*time.Millisecond)
+		if !ok {
+			t.Fatalf("expected message %d, got timeout", i)
+		}
+		received[got.Channel] = got.Content
+	}
+
+	if received["telegram"] != "hello from tg" {
+		t.Errorf("telegram: got %q, want %q", received["telegram"], "hello from tg")
+	}
+	if received["discord"] != "hello from dc" {
+		t.Errorf("discord: got %q, want %q", received["discord"], "hello from dc")
+	}
+}
+
+// TestGroupDebouncer_MultipleMessagesInSequence tests rapid sequential messages
+// to the same chat - only the last should be delivered.
+func TestGroupDebouncer_MultipleMessagesInSequence(t *testing.T) {
+	window := 50 * time.Millisecond
+	d := NewGroupDebouncer(config.DebounceConfig{
+		Enabled:   true,
+		Window:    window,
+		MaxWindow: 200 * time.Millisecond,
+	})
+	defer d.Close()
+
+	ch := d.FlushChan()
+
+	// Send 5 rapid messages
+	for i := 1; i <= 5; i++ {
+		msg := makeGroupMsg("tg", "chat1", fmt.Sprintf("message %d", i), fmt.Sprintf("id%d", i))
+		d.HandleMessage(msg)
+		time.Sleep(5 * time.Millisecond) // small delay between messages
+	}
+
+	// Wait for window to fire
+	got, ok := drainOne(t, ch, 150*time.Millisecond)
+	if !ok {
+		t.Fatal("expected flushed message after Window, got timeout")
+	}
+
+	// Should be the LAST message
+	if got.MessageID != "id5" {
+		t.Errorf("expected last message (id5), got %q", got.MessageID)
+	}
+	if got.Content != "message 5" {
+		t.Errorf("expected 'message 5', got %q", got.Content)
+	}
+
+	// No more messages should arrive
+	expectNoMessage(t, ch, 20*time.Millisecond)
+}
+
+// TestGroupDebouncer_MentionFlushesExistingAndNew verifies that when a mention arrives,
+// both any existing buffered messages AND the mention itself are flushed.
+func TestGroupDebouncer_MentionFlushesExistingAndNew(t *testing.T) {
+	window := 200 * time.Millisecond // long window
+	d := NewGroupDebouncer(config.DebounceConfig{
+		Enabled:   true,
+		Window:    window,
+		MaxWindow: 500 * time.Millisecond,
+	})
+	defer d.Close()
+
+	ch := d.FlushChan()
+
+	// Send two regular messages rapidly
+	msg1 := makeGroupMsg("tg", "chat1", "first", "id1")
+	msg2 := makeGroupMsg("tg", "chat1", "second", "id2")
+	d.HandleMessage(msg1)
+	d.HandleMessage(msg2)
+
+	// Now send a mention - should flush both buffered AND the mention
+	msgMention := makeGroupMsg("tg", "chat1", "@bot urgent", "id3")
+	msgMention.Metadata = map[string]string{"is_mentioned": "true"}
+	d.HandleMessage(msgMention)
+
+	// Should get id2 (second) first (buffered, flushed by mention)
+	got, ok := drainOne(t, ch, 50*time.Millisecond)
+	if !ok {
+		t.Fatal("expected first flushed message, got timeout")
+	}
+	if got.MessageID != "id2" {
+		t.Errorf("expected id2 (second message), got %q", got.MessageID)
+	}
+
+	// Then id3 (mention)
+	got, ok = drainOne(t, ch, 50*time.Millisecond)
+	if !ok {
+		t.Fatal("expected mention message, got timeout")
+	}
+	if got.MessageID != "id3" {
+		t.Errorf("expected id3 (mention), got %q", got.MessageID)
+	}
+
+	// No more messages
+	expectNoMessage(t, ch, 20*time.Millisecond)
 }
