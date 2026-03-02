@@ -305,3 +305,178 @@ func TestGroupDebouncer_DifferentChats(t *testing.T) {
 	// No more messages.
 	expectNoMessage(t, ch, 20*time.Millisecond)
 }
+
+
+
+// TestGroupDebouncer_IncludedChannelIDs verifies that when IncludedChannelIDs is set,
+// only messages from those specific chats are debounced; others pass through immediately.
+func TestGroupDebouncer_IncludedChannelIDs(t *testing.T) {
+	window := 100 * time.Millisecond
+	d := NewGroupDebouncer(config.DebounceConfig{
+		Enabled:            true,
+		Window:             window,
+		MaxWindow:          500 * time.Millisecond,
+		IncludedChannelIDs: []string{"tg:includedChat"},
+	})
+	defer d.Close()
+
+	ch := d.FlushChan()
+
+	// Message from included chat should be debounced
+	includedMsg := makeGroupMsg("tg", "includedChat", "buffered", "id1")
+	d.HandleMessage(includedMsg)
+
+	// Should NOT arrive immediately
+	expectNoMessage(t, ch, 20*time.Millisecond)
+
+	// Message from non-included chat should pass through immediately
+	excludedMsg := makeGroupMsg("tg", "otherChat", "immediate", "id2")
+	d.HandleMessage(excludedMsg)
+
+	got, ok := drainOne(t, ch, 50*time.Millisecond)
+	if !ok {
+		t.Fatal("non-included chat message should pass through immediately, got timeout")
+	}
+	if got.MessageID != "id2" {
+		t.Errorf("expected message id2, got %q", got.MessageID)
+	}
+
+	// Now wait for the included chat message to be flushed
+	got, ok = drainOne(t, ch, 200*time.Millisecond)
+	if !ok {
+		t.Fatal("included chat message should be flushed after Window, got timeout")
+	}
+	if got.MessageID != "id1" {
+		t.Errorf("expected message id1, got %q", got.MessageID)
+	}
+}
+
+// TestGroupDebouncer_ExcludedChannelIDs verifies that when ExcludedChannelIDs is set,
+// messages from those specific chats pass through immediately; others are debounced.
+func TestGroupDebouncer_ExcludedChannelIDs(t *testing.T) {
+	window := 100 * time.Millisecond
+	d := NewGroupDebouncer(config.DebounceConfig{
+		Enabled:            true,
+		Window:             window,
+		MaxWindow:          500 * time.Millisecond,
+		ExcludedChannelIDs: []string{"tg:excludedChat"},
+	})
+	defer d.Close()
+
+	ch := d.FlushChan()
+
+	// Message from excluded chat should pass through immediately
+	excludedMsg := makeGroupMsg("tg", "excludedChat", "immediate", "id1")
+	d.HandleMessage(excludedMsg)
+
+	got, ok := drainOne(t, ch, 50*time.Millisecond)
+	if !ok {
+		t.Fatal("excluded chat message should pass through immediately, got timeout")
+	}
+	if got.MessageID != "id1" {
+		t.Errorf("expected message id1, got %q", got.MessageID)
+	}
+
+	// Message from non-excluded chat should be debounced
+	includedMsg := makeGroupMsg("tg", "otherChat", "buffered", "id2")
+	d.HandleMessage(includedMsg)
+
+	// Should NOT arrive immediately
+	expectNoMessage(t, ch, 20*time.Millisecond)
+
+	// Now wait for it to be flushed
+	got, ok = drainOne(t, ch, 200*time.Millisecond)
+	if !ok {
+		t.Fatal("non-excluded chat message should be flushed after Window, got timeout")
+	}
+	if got.MessageID != "id2" {
+		t.Errorf("expected message id2, got %q", got.MessageID)
+	}
+}
+
+// TestGroupDebouncer_MentionBypassesIncludeList verifies that @mentioned messages
+// bypass debounce even if the chat is in the IncludedChannelIDs list.
+func TestGroupDebouncer_MentionBypassesIncludeList(t *testing.T) {
+	window := 200 * time.Millisecond
+	d := NewGroupDebouncer(config.DebounceConfig{
+		Enabled:            true,
+		Window:             window,
+		MaxWindow:          500 * time.Millisecond,
+		IncludedChannelIDs: []string{"tg:chat1"}, // Only chat1 should be debounced
+	})
+	defer d.Close()
+
+	ch := d.FlushChan()
+
+	// First, send a regular message to chat1 (should be debounced)
+	regularMsg := makeGroupMsg("tg", "chat1", "regular", "id1")
+	d.HandleMessage(regularMsg)
+
+	// Should NOT arrive immediately (debounced)
+	expectNoMessage(t, ch, 20*time.Millisecond)
+
+	// Now send an @mentioned message to the same chat (should bypass debounce)
+	mentionedMsg := makeGroupMsg("tg", "chat1", "@bot hello", "id2")
+	mentionedMsg.Metadata = map[string]string{"is_mentioned": "true"}
+	d.HandleMessage(mentionedMsg)
+
+	// First message to arrive should be the previously buffered message (id1)
+	// because flushEntryLocked is called before sending the mentioned message
+	got, ok := drainOne(t, ch, 50*time.Millisecond)
+	if !ok {
+		t.Fatal("previously buffered message should be flushed first after mention, got timeout")
+	}
+	if got.MessageID != "id1" {
+		t.Errorf("expected buffered message id1 first, got %q", got.MessageID)
+	}
+
+	// Then the mentioned message (id2) should arrive
+	got, ok = drainOne(t, ch, 50*time.Millisecond)
+	if !ok {
+		t.Fatal("@mentioned message should arrive after buffered messages are flushed, got timeout")
+	}
+	if got.MessageID != "id2" {
+		t.Errorf("expected mentioned message id2, got %q", got.MessageID)
+	}
+}
+
+// TestGroupDebouncer_MentionBypassesExcludeList verifies that @mentioned messages
+// bypass debounce even if the chat is in the ExcludedChannelIDs list (though
+// excluded chats already bypass debounce, this ensures mentions work consistently).
+func TestGroupDebouncer_MentionBypassesExcludeList(t *testing.T) {
+	window := 200 * time.Millisecond
+	d := NewGroupDebouncer(config.DebounceConfig{
+		Enabled:            true,
+		Window:             window,
+		MaxWindow:          500 * time.Millisecond,
+		ExcludedChannelIDs: []string{"tg:excludedChat"}, // excludedChat bypasses debounce
+	})
+	defer d.Close()
+
+	ch := d.FlushChan()
+
+	// Message from excluded chat passes through immediately (no debounce)
+	excludedMsg := makeGroupMsg("tg", "excludedChat", "hello", "id1")
+	d.HandleMessage(excludedMsg)
+
+	got, ok := drainOne(t, ch, 50*time.Millisecond)
+	if !ok {
+		t.Fatal("excluded chat message should pass through, got timeout")
+	}
+	if got.MessageID != "id1" {
+		t.Errorf("expected message id1, got %q", got.MessageID)
+	}
+
+	// @mentioned message in excluded chat also passes through immediately
+	mentionedMsg := makeGroupMsg("tg", "excludedChat", "@bot urgent", "id2")
+	mentionedMsg.Metadata = map[string]string{"is_mentioned": "true"}
+	d.HandleMessage(mentionedMsg)
+
+	got, ok = drainOne(t, ch, 50*time.Millisecond)
+	if !ok {
+		t.Fatal("@mentioned message in excluded chat should pass through, got timeout")
+	}
+	if got.MessageID != "id2" {
+		t.Errorf("expected message id2, got %q", got.MessageID)
+	}
+}
