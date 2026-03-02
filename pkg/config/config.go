@@ -57,7 +57,7 @@ type Config struct {
 	ModelList []ModelConfig   `json:"model_list"` // New model-centric provider configuration
 	Gateway   GatewayConfig   `json:"gateway"`
 	Tools     ToolsConfig     `json:"tools"`
-Heartbeat HeartbeatConfig `json:"heartbeat"`
+	Heartbeat HeartbeatConfig `json:"heartbeat"`
 	MemorySleep  MemorySleepConfig  `json:"memory_sleep"`
 	Debounce     DebounceConfig     `json:"debounce"`
 	Devices   DevicesConfig   `json:"devices"`

@@ -179,6 +179,16 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		default:
+			// MessageOrdering: Per-chat sequential message ordering is guaranteed by design.
+			//   1. This Run() loop executes in a single goroutine — no concurrent message processing.
+			//   2. ConsumeInbound() (below) is a blocking dequeue — exactly one message is dequeued
+			//      at a time, and no further messages are consumed until this iteration completes.
+			//   3. Sessions.Save() (loop.go:667-668) is synchronous blocking I/O — the assistant's
+			//      response is committed to storage BEFORE control returns here to dequeue the next.
+			//   4. PublishOutbound() is non-blocking (buffered channel), but session persistence has
+			//      already completed before it is called, so any subsequent message's buildMessages()
+			//      will always see the prior message's response in the persistent session history.
+			// Result: no locking or additional synchronization is needed for per-chat ordering.
 			msg, ok := al.bus.ConsumeInbound(ctx)
 			if !ok {
 				continue
